@@ -1,6 +1,6 @@
-# RectSurgNet 工具脚本说明
+# 辅助脚本说明 (Derived from MedSAM)
 
-此目录包含为 `RectSurgNet` 项目提供数据预处理、格式转换、模型评估和数据集管理等功能的实用工具脚本。
+此目录中的部分脚本**最初来源于 MedSAM 项目**，并经过修改和适配，旨在为我们的“Spatiotemporal-Enhanced MedSAM2-Mamba Framework”项目提供数据预处理、格式转换、模型评估和数据集管理等辅助功能。
 
 ---
 
