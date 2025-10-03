@@ -1,60 +1,154 @@
-# Spatiotemporal-Enhanced MedSAM2-Mamba Framework: Contextual Learning for Multi-Modal MRI-Based Rectal Cancer Staging
+[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
+
+# ST-MedMamba-RC: Rectal Cancer Staging with MedMamba
 
 ## Overview
 
-This project aims to build a **Spatiotemporal-Enhanced MedSAM2-Mamba Framework** for efficient and accurate rectal cancer staging using multi-modal MRI through contextual learning. We leverage advanced deep learning models like MedSAM2 and Mamba, deeply optimizing and applying them to this specific medical task.
+This project implements a deep learning model for rectal cancer staging using T2-weighted (T2W) and Diffusion-weighted (DWI) Magnetic Resonance Imaging (MRI) scans. The model leverages a Vision Mamba-based architecture, incorporating MedSAM2-based image encoders, custom Memory Blocks, and a MambaFusion module for robust feature extraction and fusion, followed by a classification head for staging.
 
-*Note: In the context of this project, "Spatiotemporal" is a compound concept. "Spatio" refers to the features within each 2D slice, while "temporal" is an analogous term, following industry convention, that refers to the sequential relationship of slices along the depth axis (Z-axis). Our model treats this depth sequence as a time series to capture 3D context.*
+## Project Structure
 
-## Core Methodology
+The key directories and files in this project are:
 
-Our model is designed with a multi-stage architecture to process and fuse multi-modal 3D MRI data, ultimately outputting a precise staging prediction for rectal cancer.
+```
+ST-MedMamba-RC/
+├── checkpoints/
+│   └── MedSAM2_latest.pt  # Pre-trained MedSAM2 image encoder weights
+│   └── best_model.pth     # Fine-tuned model checkpoint (generated after training)
+├── data/                  # Contains patient data and labels.csv
+│   ├── patient_001/
+│   │   ├── patient_001_t2w.nii.gz
+│   │   └── patient_001_dwi.nii.gz
+│   ├── ...
+│   └── labels.csv
+├── model/                 # Model definitions (RectalCancerStagingModel, MambaFusion, MemoryBlock)
+├── sam2/                  # MedSAM2 related modules (ImageEncoder, etc.)
+├── utils/                 # Utility functions (preprocessing, auxiliary scripts)
+├── inference.py           # Script for running inference on a single patient
+├── train.py               # Script for training the model
+├── demo_train.py          # Modified training script for demonstration/testing purposes
+├── requirements.txt       # Python dependencies
+├── README.md              # This English README file
+└── README_zh.md           # Chinese README file
+```
 
-### 1. Base Feature Extraction
+## Setup & Installation
 
--   **Input**: The model takes paired 3D MRI data from T2-weighted (T2W) and Diffusion-weighted Imaging (DWI) modalities.
--   **2D Encoder**: We utilize the powerful **MedSAM2 Image Encoder** as the base feature extractor. The 3D MRI volume is processed slice by slice, with each 2D slice fed into the encoder to extract its deep spatial features. This step lays the foundation for subsequent spatiotemporal analysis and modal fusion.
+### Prerequisites
 
-### 2. From Image to Sequence: Feature Transformation and Construction
+*   Python 3.8+
+*   `pip` (Python package installer)
 
-To enable subsequent modules like MemoryBlock and Mamba to process the data, we need to convert the spatial features extracted by the 2D encoder into a sequence. This process does not reconstruct a 3D image from feature maps; instead, it builds a **1D feature sequence** that represents the entire 3D volume.
+### Cloning the Repository
 
-The process is as follows:
+```bash
+git clone https://github.com/your_repo/ST-MedMamba-RC.git
+cd ST-MedMamba-RC
+```
 
-1.  **Input Image Dimensions**: A 3D MRI volume has dimensions of `(B, C, D, H, W)`, where `B` is the batch size, `C` is the number of channels, `D` is the slice depth, and `H` and `W` are the height and width of the slices.
+### Installing Dependencies
 
-2.  **Slice-wise Feature Extraction**: The 2D Image Encoder processes each of the `D` slices independently. For each 2D slice, the encoder outputs a feature map of dimensions `(B, C_feat, H_feat, W_feat)`, where `C_feat` is the number of feature channels (e.g., 256), and `H_feat` and `W_feat` are the reduced dimensions of the feature map.
+Install all required Python packages using `pip`:
 
-3.  **Flatten and Concatenate**: This is the crucial step. We **do not** stack these feature maps back into a 3D volume. Instead, we **flatten** the spatial dimensions (`H_feat`, `W_feat`) of each feature map into a vector. Then, we **concatenate** the flattened vectors from all `D` slices along the sequence dimension.
+```bash
+pip install -r requirements.txt
+```
 
-4.  **Final Sequence Format**: The final output of this process is a tensor with dimensions `(B, L, C_feat)`.
-    -   `B`: Batch size, which remains unchanged.
-    -   `L`: The total sequence length, equal to `D * H_feat * W_feat`. It represents the collection of all spatial positions within the entire 3D volume.
-    -   `C_feat`: The feature dimension for each position.
+### Pre-trained Checkpoint
 
-This `(B, L, C_feat)` formatted feature sequence is the input data processed by the subsequent `MemoryBlock` module. It successfully transforms the 3D spatial information of the original image into a 1D sequential structure suitable for sequence models like Transformers or Mamba.
+Download the pre-trained `MedSAM2_latest.pt` image encoder weights from [Hugging Face](https://huggingface.co/wanglab/MedSAM2) and place it in the `checkpoints/` directory. This checkpoint serves as the initial weights for the image encoders in our model.
 
-#### Memory Optimization: Slice Batching
+## Dataset Preparation
 
-Given that processing all slices of an entire 3D volume at once would incur significant memory overhead, the model implements a **Slice Batching** optimization strategy internally. During the feature extraction phase, instead of computing features for all slices at once, the model divides them into smaller mini-batches (controlled by the `slice_batch_size` parameter). Through this "divide and conquer" approach, the model significantly reduces peak memory usage during computation, making it feasible to process large-scale 3D images on hardware with limited resources. The `slice_batch_size` parameter can be configured during training and inference to balance speed and memory consumption.
+The project expects a structured dataset where each patient's MRI scans (T2W and DWI) are organized into their own subdirectory, and labels are provided in a `labels.csv` file.
 
-### 3. Spatiotemporal Context Enhancement (`MemoryBlock`)
+### Directory Structure
 
--   The feature sequence extracted from the 2D encoder is fed into our custom-designed **MemoryBlock** module.
--   This module captures contextual dependencies between slices in the sequence via **spatiotemporal self-attention**, effectively integrating spatial and temporal (sequential) information within the 3D volume.
--   Simultaneously, by performing cross-attention with a learnable **prototype memory**, the MemoryBlock enhances the semantic representation of the features, making them more sensitive to pathological characteristics related to rectal cancer.
+Organize your patient data as follows:
 
-### 4. Innovative Multi-Modal Fusion (`BGAMF`)
+```
+data/
+├── patient_001/
+│   ├── patient_001_t2w.nii.gz
+│   └── patient_001_dwi.nii.gz
+├── patient_002/
+│   ├── patient_002_t2w.nii.gz
+│   └── patient_002_dwi.nii.gz
+├── ...
+└── labels.csv
+```
 
-This is the core innovation of our methodology. We designed and implemented a **Bidirectional Gated & Alignment-aware Mamba Fusion (BGAMF)** framework, which replaces traditional fusion methods like simple concatenation or attention. BGAMF deeply fuses information from T2W and DWI modalities through a refined three-step process:
+*   **`data/`**: The root directory for all your patient data.
+*   **`patient_XXX/`**: Each subdirectory should be named with a unique `patient_id` (e.g., `patient_001`, `patient_002`).
+*   **Image Files**: Inside each `patient_XXX` folder, place the T2W and DWI NIfTI files. The filenames should contain `t2w` (or `T2W`, `se1`) and `dwi` (or `DWI`, `se7`) respectively, and end with `.nii.gz`. For example: `patient_001_t2w.nii.gz` and `patient_001_dwi.nii.gz`.
 
-1.  **Alignment-aware Feature Mapping**: Before fusion, we first align the features of the two modalities using a **cross-attention module**. T2W features are adjusted using DWI as context, and vice versa. This step resolves potential spatial or semantic discrepancies between the multi-modal data, ensuring that the subsequent fusion is performed on highly correlated and aligned features.
+### `labels.csv` Format
 
-2.  **Bidirectional Mamba Modeling**: The aligned feature sequence of each modality is processed by a **Bidirectional Mamba (Bi-Mamba)** block. Through forward and backward scans, the model efficiently captures global long-range dependencies within each sequence at linear complexity, achieving a comprehensive contextual understanding of the entire 3D volume.
+Create a `labels.csv` file directly under the `data/` directory. This file should contain two columns: `patient_id` and `label`. The `patient_id` must exactly match the names of your patient subdirectories.
 
-3.  **Gated Fusion Mechanism**: The two modality features, after being processed by Bi-Mamba, are concatenated and fed into a **gating unit** (a linear layer followed by a Sigmoid activation function). This unit dynamically learns a weight (gate) to adaptively control the contribution of T2W and DWI information at each feature position, following the formula: `f_fusion = gate * h_t2w + (1 - gate) * h_dwi`. This mechanism allows the model to intelligently select and prioritize the more informative modality at specific spatial locations, leading to a more refined and effective feature fusion.
+Example `labels.csv`:
 
-### 5. Classification Prediction
+```csv
+patient_id,label
+patient_001,1
+patient_002,3
+patient_003,0
+...
+patient_N,2
+```
 
--   The unified feature sequence, after being deeply fused by the BGAMF module, is further refined by a final **post-fusion Bi-Mamba block**.
--   Finally, the refined feature sequence is passed to a **Classification Head** (Global Average Pooling layer + Fully Connected layer) to output the final rectal cancer staging prediction.
+## Training the Model
+
+To train the model, run the `train.py` script. The script will automatically load data from the `data/` directory, split it into training and validation sets, and save the best performing model checkpoint.
+
+```bash
+python train.py [OPTIONS]
+```
+
+### Key Training Options
+
+*   `--data_root`: Root directory of the dataset (default: `data/`).
+*   `--labels_csv`: Path to the CSV file with labels (default: `data/labels.csv`).
+*   `--epochs`: Number of training epochs (default: `50`).
+*   `--batch_size`: Batch size for training (default: `1`).
+*   `--lr`: Learning rate (default: `1e-4`).
+*   `--val_split`: Fraction of data to use for validation (default: `0.2`).
+*   `--patience`: Patience for early stopping (default: `5`). If validation loss does not improve for this many epochs, training stops.
+*   `--pretrained_checkpoint`: Path to a pre-trained checkpoint for fine-tuning (default: `checkpoints/MedSAM2_latest.pt`).
+
+**Example:**
+
+```bash
+python train.py --epochs 100 --batch_size 2 --lr 5e-5 --patience 10
+```
+
+The best model (based on validation loss) will be saved as `checkpoints/best_model.pth`.
+
+## Running Inference
+
+To run inference on a specific patient, use the `inference.py` script and provide the `--patient_id` argument.
+
+```bash
+python inference.py --patient_id <YOUR_PATIENT_ID> [OPTIONS]
+```
+
+### Key Inference Options
+
+*   `--patient_id`: **Required.** ID of the patient to run inference on (e.g., `patient_001`).
+*   `--data_root`: Root directory of the dataset (default: `data/`).
+*   `--checkpoint`: Path to the model checkpoint file (default: `checkpoints/best_model.pth`).
+*   `--slice_batch_size`: Batch size for processing 3D slices within the model (default: `1`).
+
+**Example:**
+
+```bash
+python inference.py --patient_id patient_001
+python inference.py --patient_id patient_005 --checkpoint checkpoints/my_custom_model.pth
+```
+
+The script will print the predicted class and the softmax probabilities for the last batch of the input.
+
+## License
+
+This project is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0) License](https://creativecommons.org/licenses/by-nc-sa/4.0/). See the [LICENSE](LICENSE) file for details.

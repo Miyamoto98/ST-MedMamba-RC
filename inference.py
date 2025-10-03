@@ -5,6 +5,7 @@ import numpy as np
 import nibabel as nib
 import os
 import argparse
+import glob
 
 # To ensure all modules are importable, add the project root to PYTHONPATH
 # For example, run `export PYTHONPATH=$PYTHONPATH:/path/to/MedSAM2-main`
@@ -22,15 +23,13 @@ def run_inference():
     target_size = (slice_depth, img_size, img_size)
     
     parser = argparse.ArgumentParser(description='Run inference with a MedSAM2 model.')
-    parser.add_argument('--checkpoint', type=str, default='checkpoints/MedSAM2_latest.pt', help='Path to the checkpoint file')
-    parser.add_argument('--t2w_path', type=str, default='data\Ⅲ\SE1.nii.gz', help='Path to the T2W NIfTI file')
-    parser.add_argument('--dwi_path', type=str, default='data\Ⅲ\SE7.nii.gz', help='Path to the DWI NIfTI file')
+    parser.add_argument('--checkpoint', type=str, default='checkpoints/best_model.pth', help='Path to the checkpoint file')
+    parser.add_argument('--patient_id', type=str, required=True, help='ID of the patient to run inference on (e.g., patient_001)')
+    parser.add_argument('--data_root', type=str, default='data', help='Root directory of the dataset')
     parser.add_argument('--slice_batch_size', type=int, default=1, help='Batch size for processing 3D slices')
     args = parser.parse_args()
 
     checkpoint_path = args.checkpoint
-    t2w_nifti_path = args.t2w_path
-    dwi_nifti_path = args.dwi_path
     slice_batch_size = args.slice_batch_size
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -44,27 +43,16 @@ def run_inference():
     # --- Load Checkpoint ---
     print(f"Loading model checkpoint from {checkpoint_path}...")
     try:
-        full_checkpoint = torch.load(checkpoint_path, map_location=device)
+        # Load the state dictionary from the fine-tuned model
+        state_dict = torch.load(checkpoint_path, map_location=device)
         
-        # If the state_dict is nested under a 'model' key, extract it
-        if isinstance(full_checkpoint, dict) and 'model' in full_checkpoint:
-            full_checkpoint = full_checkpoint['model']
-
-        # Extract image_encoder state_dict
-        image_encoder_state_dict = {}
-        for key, value in full_checkpoint.items():
-            if key.startswith('image_encoder.'):
-                image_encoder_state_dict[key.replace('image_encoder.', '')] = value
+        # Load the state dict into the model
+        model.load_state_dict(state_dict)
         
-        # Load image_encoder weights into t2w_encoder and dwi_encoder
-        # Use strict=False because the ImageEncoder might not have all keys from the full checkpoint's image_encoder
-        model.t2w_encoder.load_state_dict(image_encoder_state_dict, strict=False)
-        model.dwi_encoder.load_state_dict(image_encoder_state_dict, strict=False)
-        
-        print("Image encoder weights loaded successfully into t2w_encoder and dwi_encoder.")
+        print("Fine-tuned model weights loaded successfully.")
     except FileNotFoundError:
         print(f"Error: Checkpoint file not found at {checkpoint_path}")
-        print("Please ensure the checkpoint is correctly placed in the 'checkpoints' folder.")
+        print("Please ensure the checkpoint is correctly placed in the 'checkpoints' folder or provide the correct path using --checkpoint.")
         return
     except Exception as e:
         print(f"Error loading checkpoint: {e}")
@@ -73,28 +61,41 @@ def run_inference():
     model.eval() # Set model to evaluation mode
 
     # --- Load NIfTI Data ---
-    print(f"Loading T2W NIfTI file from {t2w_nifti_path}...")
+    # --- Find and Load NIfTI Data ---
+    patient_dir = os.path.join(args.data_root, args.patient_id)
+    print(f"Searching for patient data in: {patient_dir}")
+
+    if not os.path.isdir(patient_dir):
+        print(f"Error: Patient directory not found at {patient_dir}")
+        return
+
     try:
+        # Use glob to find files, making it robust to exact naming
+        t2w_files = glob.glob(os.path.join(patient_dir, '*t2w*.nii.gz')) + glob.glob(os.path.join(patient_dir, '*T2W*.nii.gz')) + glob.glob(os.path.join(patient_dir, '*se1*.nii.gz'))
+        dwi_files = glob.glob(os.path.join(patient_dir, '*dwi*.nii.gz')) + glob.glob(os.path.join(patient_dir, '*DWI*.nii.gz')) + glob.glob(os.path.join(patient_dir, '*se7*.nii.gz'))
+
+        if not t2w_files:
+            print(f"Error: No T2W file found in {patient_dir}")
+            return
+        if not dwi_files:
+            print(f"Error: No DWI file found in {patient_dir}")
+            return
+
+        t2w_nifti_path = t2w_files[0]
+        dwi_nifti_path = dwi_files[0]
+
+        print(f"Loading T2W NIfTI file from {t2w_nifti_path}...")
         t2w_nifti_img = nib.load(t2w_nifti_path)
         t2w_volume_raw = t2w_nifti_img.get_fdata().astype(np.float32)
         print(f"T2W NIfTI file loaded. Original shape: {t2w_volume_raw.shape}")
-    except FileNotFoundError:
-        print(f"Error: T2W NIfTI file not found at {t2w_nifti_path}")
-        return
-    except Exception as e:
-        print(f"Error loading T2W NIfTI file: {e}")
-        return
 
-    print(f"Loading DWI NIfTI file from {dwi_nifti_path}...")
-    try:
+        print(f"Loading DWI NIfTI file from {dwi_nifti_path}...")
         dwi_nifti_img = nib.load(dwi_nifti_path)
         dwi_volume_raw = dwi_nifti_img.get_fdata().astype(np.float32)
         print(f"DWI NIfTI file loaded. Original shape: {dwi_volume_raw.shape}")
-    except FileNotFoundError:
-        print(f"Error: DWI NIfTI file not found at {dwi_nifti_path}")
-        return
+
     except Exception as e:
-        print(f"Error loading DWI NIfTI file: {e}")
+        print(f"An error occurred while loading data: {e}")
         return
 
     # --- Preprocessing ---

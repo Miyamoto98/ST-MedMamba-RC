@@ -23,7 +23,7 @@ def get_medsam_encoder(d_model: int = 256):
             global_att_blocks=[5, 7, 9], window_pos_embed_bkg_spatial_size=[7, 7],
         ),
         neck=FpnNeck(
-            position_encoding=PositionEmbeddingSine(num_pos_feats=256, normalize=True),
+            position_encoding=PositionEmbeddingSine(num_pos_feats=d_model, normalize=True),
             d_model=d_model, backbone_channel_list=[768, 384, 192, 96],
             fpn_top_down_levels=[2, 3], fpn_interp_model="nearest",
         ),
