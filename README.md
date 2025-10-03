@@ -1,67 +1,60 @@
 # Spatiotemporal-Enhanced MedSAM2-Mamba Framework: Contextual Learning for Multi-Modal MRI-Based Rectal Cancer Staging
 
-## 项目概览
+## Overview
 
-本项目旨在构建一个**时空增强型MedSAM2-Mamba框架**，通过上下文学习实现多模态MRI图像在直肠癌分期中的高效与精准应用。我们利用了先进的深度学习模型（如 MedSAM2 和 Mamba），并针对直肠癌分期这一特定医学任务进行了深度优化与应用。
+This project aims to build a **Spatiotemporal-Enhanced MedSAM2-Mamba Framework** for efficient and accurate rectal cancer staging using multi-modal MRI through contextual learning. We leverage advanced deep learning models like MedSAM2 and Mamba, deeply optimizing and applying them to this specific medical task.
 
-*注：在本项目的语境中，“时空”（Spatiotemporal）是一个复合概念。“空间”指每个2D切片内的特征，而“时间”则是一种基于行业惯例的类比用法，特指沿深度轴（Z轴）的切片序列关系。我们的模型将这个深度序列视为一种时间序列来捕捉三维上下文信息。*
+*Note: In the context of this project, "Spatiotemporal" is a compound concept. "Spatio" refers to the features within each 2D slice, while "temporal" is an analogous term, following industry convention, that refers to the sequential relationship of slices along the depth axis (Z-axis). Our model treats this depth sequence as a time series to capture 3D context.*
 
-## 核心方法论
+## Core Methodology
 
-我们的模型通过一个多阶段的架构，专门为处理和融合多模态3D MRI数据而设计，最终输出精准的直肠癌分期预测。
+Our model is designed with a multi-stage architecture to process and fuse multi-modal 3D MRI data, ultimately outputting a precise staging prediction for rectal cancer.
 
-### 1. 基础特征提取
+### 1. Base Feature Extraction
 
--   **输入**: 模型的输入是配对的T2加权成像（T2W）和弥散加权成像（DWI）两种模态的3D MRI数据。
--   **2D编码器**: 我们利用强大的**MedSAM2图像编码器**作为基础特征提取器。3D MRI容积被逐层切片，每一张2D切片都被送入编码器，以提取其深层空间特征。这一步为后续的时空分析和模态融合奠定了基础。
+-   **Input**: The model takes paired 3D MRI data from T2-weighted (T2W) and Diffusion-weighted Imaging (DWI) modalities.
+-   **2D Encoder**: We utilize the powerful **MedSAM2 Image Encoder** as the base feature extractor. The 3D MRI volume is processed slice by slice, with each 2D slice fed into the encoder to extract its deep spatial features. This step lays the foundation for subsequent spatiotemporal analysis and modal fusion.
 
-### 2. 从影像到序列：特征的转换与构建
+### 2. From Image to Sequence: Feature Transformation and Construction
 
-为了让后续的模块（如MemoryBlock和Mamba）能够处理数据，我们需要将2D编码器提取的空间特征转换为一个序列。这个过程并非将特征图重新组合成3D影像，而是构建一个能代表整个3D容积的**一维特征序列**。
+To enable subsequent modules like MemoryBlock and Mamba to process the data, we need to convert the spatial features extracted by the 2D encoder into a sequence. This process does not reconstruct a 3D image from feature maps; instead, it builds a **1D feature sequence** that represents the entire 3D volume.
 
-具体流程如下：
+The process is as follows:
 
-1.  **输入影像维度**: 假设一个3D MRI容积的维度为 `(B, C, D, H, W)`，其中 `B` 是批量大小，`C` 是通道数，`D` 是切片深度，`H` 和 `W` 是切片的高和宽。
+1.  **Input Image Dimensions**: A 3D MRI volume has dimensions of `(B, C, D, H, W)`, where `B` is the batch size, `C` is the number of channels, `D` is the slice depth, and `H` and `W` are the height and width of the slices.
 
-2.  **逐片特征提取**: 2D图像编码器（Image Encoder）独立处理 `D` 个切片中的每一个。对于每个2D切片，编码器输出一个特征图（Feature Map），其维度为 `(B, C_feat, H_feat, W_feat)`，其中 `C_feat` 是特征通道数（例如256），`H_feat` 和 `W_feat` 是特征图的缩减尺寸。
+2.  **Slice-wise Feature Extraction**: The 2D Image Encoder processes each of the `D` slices independently. For each 2D slice, the encoder outputs a feature map of dimensions `(B, C_feat, H_feat, W_feat)`, where `C_feat` is the number of feature channels (e.g., 256), and `H_feat` and `W_feat` are the reduced dimensions of the feature map.
 
-3.  **展平与拼接**: 关键的一步在这里：我们**不会**将这些特征图重新堆叠成一个3D容积。相反，我们将每个特征图的空间维度 (`H_feat`, `W_feat`) **展平**（flatten），使其变为一个向量。然后，将所有 `D` 个切片的展平向量**沿序列维度进行拼接**（concatenate）。
+3.  **Flatten and Concatenate**: This is the crucial step. We **do not** stack these feature maps back into a 3D volume. Instead, we **flatten** the spatial dimensions (`H_feat`, `W_feat`) of each feature map into a vector. Then, we **concatenate** the flattened vectors from all `D` slices along the sequence dimension.
 
-4.  **最终序列格式**: 这个过程的最终输出是一个维度为 `(B, L, C_feat)` 的张量。
-    -   `B`: 批量大小，保持不变。
-    -   `L`: 序列的总长度，等于 `D * H_feat * W_feat`。它代表了整个3D容积中所有空间位置的集合。
-    -   `C_feat`: 每个位置的特征维度。
+4.  **Final Sequence Format**: The final output of this process is a tensor with dimensions `(B, L, C_feat)`.
+    -   `B`: Batch size, which remains unchanged.
+    -   `L`: The total sequence length, equal to `D * H_feat * W_feat`. It represents the collection of all spatial positions within the entire 3D volume.
+    -   `C_feat`: The feature dimension for each position.
 
-这个 `(B, L, C_feat)` 格式的特征序列，就是后续 `MemoryBlock` 模块所处理的输入数据。它成功地将原始影像的3D空间信息转换为了一个适合序列模型（如Transformer或Mamba）处理的一维序列结构。
+This `(B, L, C_feat)` formatted feature sequence is the input data processed by the subsequent `MemoryBlock` module. It successfully transforms the 3D spatial information of the original image into a 1D sequential structure suitable for sequence models like Transformers or Mamba.
 
-#### 内存优化：切片批处理
+#### Memory Optimization: Slice Batching
 
-考虑到一次性处理整个3D容积的全部切片会产生巨大的显存开销，模型在内部实现了一个**切片批处理（Slice Batching）**的优化策略。在特征提取阶段，模型并非一次性计算所有切片的特征，而是将它们分成多个小批次（由 `slice_batch_size` 参数控制）。通过这种“化整为零”的方式，模型显著降低了计算过程中的峰值显存占用，使得在有限的硬件资源下处理大规模3D影像成为可能。该 `slice_batch_size` 参数可在训练和推理时进行配置，以平衡速度与显存开销。
+Given that processing all slices of an entire 3D volume at once would incur significant memory overhead, the model implements a **Slice Batching** optimization strategy internally. During the feature extraction phase, instead of computing features for all slices at once, the model divides them into smaller mini-batches (controlled by the `slice_batch_size` parameter). Through this "divide and conquer" approach, the model significantly reduces peak memory usage during computation, making it feasible to process large-scale 3D images on hardware with limited resources. The `slice_batch_size` parameter can be configured during training and inference to balance speed and memory consumption.
 
-### 3. 时空上下文增强 (`MemoryBlock`)
+### 3. Spatiotemporal Context Enhancement (`MemoryBlock`)
 
--   从2D编码器提取的特征序列（代表了原始3D影像的空间信息）被送入我们设计的**MemoryBlock**模块。
--   该模块通过**时空自注意力机制**捕获切片序列间的上下文依赖关系，有效整合了3D容积内的空间和时间（序列）信息。
--   同时，通过与一个可学习的**原型记忆库**进行交叉注意力计算，MemoryBlock能够增强特征的语义表达，使其对直肠癌相关的病理特征更加敏感。
+-   The feature sequence extracted from the 2D encoder is fed into our custom-designed **MemoryBlock** module.
+-   This module captures contextual dependencies between slices in the sequence via **spatiotemporal self-attention**, effectively integrating spatial and temporal (sequential) information within the 3D volume.
+-   Simultaneously, by performing cross-attention with a learnable **prototype memory**, the MemoryBlock enhances the semantic representation of the features, making them more sensitive to pathological characteristics related to rectal cancer.
 
-### 3. 创新的多模态融合 (`BGAMF`)
+### 4. Innovative Multi-Modal Fusion (`BGAMF`)
 
-这是我们方法论的核心创新，我们设计并实现了一个**双向门控与对齐感知Mamba融合框架 (Bidirectional Gated & Alignment-aware Mamba Fusion, BGAMF)**，取代了传统的简单拼接或注意力融合方法。BGAMF通过一个精细的三步流程来深度融合T2W和DWI两种模态的信息：
+This is the core innovation of our methodology. We designed and implemented a **Bidirectional Gated & Alignment-aware Mamba Fusion (BGAMF)** framework, which replaces traditional fusion methods like simple concatenation or attention. BGAMF deeply fuses information from T2W and DWI modalities through a refined three-step process:
 
-1.  **对齐感知特征映射 (Alignment-aware Feature Mapping)**:
-    -   在融合之前，我们首先通过一个**交叉注意力模块**来对齐两种模态的特征。T2W特征以DWI为上下文进行调整，反之亦然。
-    -   这一步骤解决了多模态数据间可能存在的空间或语义偏差，确保后续融合的是高度相关和对齐的特征。
+1.  **Alignment-aware Feature Mapping**: Before fusion, we first align the features of the two modalities using a **cross-attention module**. T2W features are adjusted using DWI as context, and vice versa. This step resolves potential spatial or semantic discrepancies between the multi-modal data, ensuring that the subsequent fusion is performed on highly correlated and aligned features.
 
-2.  **双向Mamba建模 (Bidirectional Mamba Modeling)**:
-    -   对齐后的每种模态特征序列分别被送入一个**双向Mamba (Bi-Mamba)** 模块。
-    -   通过前向和后向的Mamba扫描，模型能够以线性复杂度高效捕获每个序列内部的全局长程依赖关系，获得对整个3D容积的全面上下文理解。
+2.  **Bidirectional Mamba Modeling**: The aligned feature sequence of each modality is processed by a **Bidirectional Mamba (Bi-Mamba)** block. Through forward and backward scans, the model efficiently captures global long-range dependencies within each sequence at linear complexity, achieving a comprehensive contextual understanding of the entire 3D volume.
 
-3.  **门控融合机制 (Gated Fusion Mechanism)**:
-    -   经过Bi-Mamba处理后的两种模态特征被拼接在一起，并送入一个**门控单元**（一个线性层后接Sigmoid激活函数）。
-    -   该门控单元动态地学习一个权重（gate），用于自适应地控制在每个特征位置上，T2W和DWI信息的贡献比例。公式为：`f_fusion = gate * h_t2w + (1 - gate) * h_dwi`。
-    -   这种机制使得模型能够智能地选择和优先处理在特定空间位置上信息量更丰富的模态，从而实现更精细和有效的特征融合。
+3.  **Gated Fusion Mechanism**: The two modality features, after being processed by Bi-Mamba, are concatenated and fed into a **gating unit** (a linear layer followed by a Sigmoid activation function). This unit dynamically learns a weight (gate) to adaptively control the contribution of T2W and DWI information at each feature position, following the formula: `f_fusion = gate * h_t2w + (1 - gate) * h_dwi`. This mechanism allows the model to intelligently select and prioritize the more informative modality at specific spatial locations, leading to a more refined and effective feature fusion.
 
-### 4. 分类预测
+### 5. Classification Prediction
 
--   经过BGAMF模块深度融合后的统一特征序列，会经过最后的**后处理Bi-Mamba模块**进一步提炼。
--   最终，提炼后的特征序列被送入一个**分类头**（全局平均池化层+全连接层），输出最终的直肠癌分期预测结果。
+-   The unified feature sequence, after being deeply fused by the BGAMF module, is further refined by a final **post-fusion Bi-Mamba block**.
+-   Finally, the refined feature sequence is passed to a **Classification Head** (Global Average Pooling layer + Fully Connected layer) to output the final rectal cancer staging prediction.
